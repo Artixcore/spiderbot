@@ -2,6 +2,10 @@ import logging
 import telebot
 import requests
 import psycopg2
+import hmac
+import hashlib
+import base64
+import json
 from threading import Thread
 import os
 from dotenv import load_dotenv
@@ -92,22 +96,105 @@ def show_trade_summary(message):
     total_traded = row[0] if row else 0
     bot.send_message(message.chat.id, f"Total USD traded: ${total_traded}")
 
-# Trading strategy implementations
+# Check user's balance
+def check_balance(api_key, api_secret, amount):
+    url = "https://api.coinbase.com/v2/accounts"
+    headers = {
+        "CB-ACCESS-KEY": api_key,
+        "CB-ACCESS-SIGN": api_secret,
+        "CB-ACCESS-TIMESTAMP": str(int(time.time())),
+        "Content-Type": "application/json"
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        balance = sum([float(account['balance']['amount']) for account in data['data'] if account['currency'] == 'USD'])
+        return balance >= float(amount)
+    else:
+        print(f"Error fetching balance: {response.status_code}")
+        return False
+
+# Helper function to create Coinbase API signature
+def create_coinbase_signature(api_secret, timestamp, method, request_path, body=''):
+    message = f'{timestamp}{method}{request_path}{body}'
+    hmac_key = base64.b64decode(api_secret)
+    signature = hmac.new(hmac_key, message.encode('utf-8'), hashlib.sha256)
+    return base64.b64encode(signature.digest()).decode('utf-8')
+
+# Function to get current price for a specific cryptocurrency
+def get_current_price(api_key, api_secret, product_id='BTC-USD'):
+    url = f'https://api.coinbase.com/v2/prices/{product_id}/spot'
+    timestamp = str(int(time.time()))
+    request_path = f'/v2/prices/{product_id}/spot'
+    method = 'GET'
+    headers = {
+        'CB-ACCESS-KEY': api_key,
+        'CB-ACCESS-SIGN': create_coinbase_signature(api_secret, timestamp, method, request_path),
+        'CB-ACCESS-TIMESTAMP': timestamp,
+        'Content-Type': 'application/json'
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return float(response.json()['data']['amount'])
+    else:
+        raise Exception(f"Error fetching current price: {response.status_code}")
+
+# Function to place a market order on Coinbase
+def place_market_order(api_key, api_secret, amount, side='buy', product_id='BTC-USD'):
+    url = 'https://api.coinbase.com/v2/orders'
+    timestamp = str(int(time.time()))
+    request_path = '/v2/orders'
+    method = 'POST'
+    body = {
+        'type': 'market',
+        'side': side,
+        'product_id': product_id,
+        'funds': amount
+    }
+    body_str = json.dumps(body)
+    headers = {
+        'CB-ACCESS-KEY': api_key,
+        'CB-ACCESS-SIGN': create_coinbase_signature(api_secret, timestamp, method, request_path, body_str),
+        'CB-ACCESS-TIMESTAMP': timestamp,
+        'Content-Type': 'application/json'
+    }
+    response = requests.post(url, headers=headers, data=body_str)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception(f"Error placing market order: {response.status_code}")
+
+# Buy and Hold Strategy
 def buy_and_hold(api_key, api_secret, amount):
-    # Dummy function for buy and hold strategy
-    # Here you would interact with the Coinbase API to execute a buy and hold trade
-    return f"Executed Buy and Hold with ${amount}"
+    try:
+        current_price = get_current_price(api_key, api_secret)
+        amount_in_crypto = amount / current_price
+        order_response = place_market_order(api_key, api_secret, str(amount_in_crypto))
+        return f"Executed Buy and Hold with ${amount}: {order_response}"
+    except Exception as e:
+        return f"Error executing Buy and Hold: {e}"
 
+# Moving Average Strategy
 def moving_average(api_key, api_secret, amount):
-    # Dummy function for moving average strategy
-    # Here you would interact with the Coinbase API to execute a moving average trade
-    return f"Executed Moving Average with ${amount}"
+    try:
+        # Placeholder logic for moving average strategy
+        # In a real implementation, you would calculate the moving average
+        # and decide whether to buy or sell based on the average
+        order_response = place_market_order(api_key, api_secret, amount)
+        return f"Executed Moving Average with ${amount}: {order_response}"
+    except Exception as e:
+        return f"Error executing Moving Average: {e}"
 
+# Mean Reversion Strategy
 def mean_reversion(api_key, api_secret, amount):
-    # Dummy function for mean reversion strategy
-    # Here you would interact with the Coinbase API to execute a mean reversion trade
-    return f"Executed Mean Reversion with ${amount}"
-
+    try:
+        # Placeholder logic for mean reversion strategy
+        # In a real implementation, you would calculate the mean reversion
+        # and decide whether to buy or sell based on the reversion
+        order_response = place_market_order(api_key, api_secret, amount)
+        return f"Executed Mean Reversion with ${amount}: {order_response}"
+    except Exception as e:
+        return f"Error executing Mean Reversion: {e}
 # Telegram bot commands
 @bot.message_handler(commands=["start"])
 def start(message):
