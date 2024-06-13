@@ -4,9 +4,10 @@ import requests
 import sqlite3
 from threading import Thread
 import os
+import time
 
 # Replace with your Telegram bot token
-bot = telebot.TeleBot(os.getenv("TELEGRAM_BOT_TOKEN"))
+bot = telebot.TeleBot("7171569819:AAEVksdTTXyhml1JlYQmZu_spmqWyWLu8lw")
 
 # SQLite database setup
 conn = sqlite3.connect('trading_bot.db', check_same_thread=False)
@@ -230,7 +231,14 @@ def execute_trade(user_id, strategy, amount):
             c.execute("UPDATE user_data SET total_traded = total_traded + ? WHERE user_id = ?", (float(amount), user_id))
             conn.commit()
 
+            # Send notification to the user
             bot.send_message(user_id, f"Trade executed successfully: {trade_result}")
+
+            # Simulate sending periodic updates (replace this with real update logic)
+            for i in range(5):
+                time.sleep(10)  # Simulate time delay for periodic updates
+                bot.send_message(user_id, f"Update {i + 1}/5: Trade still in progress.")
+
         except Exception as e:
             bot.send_message(user_id, f"Error executing trade: {e}")
 
