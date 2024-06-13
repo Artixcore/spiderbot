@@ -1,23 +1,32 @@
 import logging
 import telebot
 import requests
-import sqlite3
+import psycopg2
 from threading import Thread
 import os
-import time
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Replace with your Telegram bot token
-bot = telebot.TeleBot("7171569819:AAEVksdTTXyhml1JlYQmZu_spmqWyWLu8lw")
+bot = telebot.TeleBot(os.getenv("TELEGRAM_BOT_TOKEN"))
 
-# SQLite database setup
-conn = sqlite3.connect('trading_bot.db', check_same_thread=False)
+# PostgreSQL database setup
+conn = psycopg2.connect(
+    dbname=os.getenv("POSTGRES_DB"),
+    user=os.getenv("POSTGRES_USER"),
+    password=os.getenv("POSTGRES_PASSWORD"),
+    host=os.getenv("POSTGRES_HOST"),
+    port=os.getenv("POSTGRES_PORT")
+)
 c = conn.cursor()
 
 # Create user_data table
 c.execute('''
     CREATE TABLE IF NOT EXISTS user_data (
-        user_id INTEGER PRIMARY KEY,
-        subscribed INTEGER,
+        user_id BIGINT PRIMARY KEY,
+        subscribed BOOLEAN,
         api_key TEXT,
         api_secret TEXT,
         total_traded REAL
@@ -28,9 +37,9 @@ conn.commit()
 # Functions to display buttons, prices, etc.
 def show_main_menu(message):
     user_id = message.from_user.id
-    c.execute("SELECT subscribed FROM user_data WHERE user_id = ?", (user_id,))
+    c.execute("SELECT subscribed FROM user_data WHERE user_id = %s", (user_id,))
     row = c.fetchone()
-    if row and row[0] == 1:
+    if row and row[0]:
         keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         buttons = [
             telebot.types.KeyboardButton("Coin List"),
@@ -78,7 +87,7 @@ def get_coin_prices():
 
 def show_trade_summary(message):
     user_id = message.from_user.id
-    c.execute("SELECT total_traded FROM user_data WHERE user_id = ?", (user_id,))
+    c.execute("SELECT total_traded FROM user_data WHERE user_id = %s", (user_id,))
     row = c.fetchone()
     total_traded = row[0] if row else 0
     bot.send_message(message.chat.id, f"Total USD traded: ${total_traded}")
@@ -103,12 +112,12 @@ def mean_reversion(api_key, api_secret, amount):
 @bot.message_handler(commands=["start"])
 def start(message):
     user_id = message.from_user.id
-    c.execute("INSERT OR IGNORE INTO user_data (user_id, subscribed, total_traded) VALUES (?, ?, ?)", (user_id, 0, 0))
+    c.execute("INSERT INTO user_data (user_id, subscribed, total_traded) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, False, 0))
     conn.commit()
 
-    c.execute("SELECT subscribed FROM user_data WHERE user_id = ?", (user_id,))
+    c.execute("SELECT subscribed FROM user_data WHERE user_id = %s", (user_id,))
     row = c.fetchone()
-    if row and row[0] == 1:
+    if row and row[0]:
         show_main_menu(message)
     else:
         subscribe_message = (
@@ -123,7 +132,7 @@ def start(message):
 @bot.message_handler(func=lambda message: message.text == "Subscribe")
 def subscribe(message):
     user_id = message.from_user.id
-    c.execute("UPDATE user_data SET subscribed = 1 WHERE user_id = ?", (user_id,))
+    c.execute("UPDATE user_data SET subscribed = TRUE WHERE user_id = %s", (user_id,))
     conn.commit()
     bot.send_message(message.chat.id, "You have successfully subscribed!")
     show_main_menu(message)
@@ -131,7 +140,7 @@ def subscribe(message):
 @bot.message_handler(func=lambda message: message.text == "Unsubscribe")
 def unsubscribe(message):
     user_id = message.from_user.id
-    c.execute("UPDATE user_data SET subscribed = 0 WHERE user_id = ?", (user_id,))
+    c.execute("UPDATE user_data SET subscribed = FALSE WHERE user_id = %s", (user_id,))
     conn.commit()
     bot.send_message(message.chat.id, "You have successfully unsubscribed!")
     start(message)
@@ -147,9 +156,9 @@ def handle_trade_summary(message):
 @bot.message_handler(func=lambda message: message.text == "Start Trade")
 def handle_start_trade(message):
     user_id = message.from_user.id
-    c.execute("SELECT subscribed FROM user_data WHERE user_id = ?", (user_id,))
+    c.execute("SELECT subscribed FROM user_data WHERE user_id = %s", (user_id,))
     row = c.fetchone()
-    if row and row[0] == 1:
+    if row and row[0]:
         bot.send_message(message.chat.id, "Please enter your Coinbase API Key:")
         bot.register_next_step_handler(message, handle_api_key)
     else:
@@ -158,7 +167,7 @@ def handle_start_trade(message):
 def handle_api_key(message):
     user_id = message.from_user.id
     api_key = message.text
-    c.execute("UPDATE user_data SET api_key = ? WHERE user_id = ?", (api_key, user_id))
+    c.execute("UPDATE user_data SET api_key = %s WHERE user_id = %s", (api_key, user_id))
     conn.commit()
     bot.send_message(message.chat.id, "Please enter your Coinbase API Secret:")
     bot.register_next_step_handler(message, handle_api_secret)
@@ -166,7 +175,7 @@ def handle_api_key(message):
 def handle_api_secret(message):
     user_id = message.from_user.id
     api_secret = message.text
-    c.execute("UPDATE user_data SET api_secret = ? WHERE user_id = ?", (api_secret, user_id))
+    c.execute("UPDATE user_data SET api_secret = %s WHERE user_id = %s", (api_secret, user_id))
     conn.commit()
     bot.send_message(message.chat.id, "API keys have been saved and validated.")
     show_main_menu(message)
@@ -174,9 +183,9 @@ def handle_api_secret(message):
 @bot.message_handler(func=lambda message: message.text == "AI Trade")
 def handle_ai_trade(message):
     user_id = message.from_user.id
-    c.execute("SELECT subscribed FROM user_data WHERE user_id = ?", (user_id,))
+    c.execute("SELECT subscribed FROM user_data WHERE user_id = %s", (user_id,))
     row = c.fetchone()
-    if row and row[0] == 1:
+    if row and row[0]:
         bot.send_message(message.chat.id, "Please enter the amount in dollars to trade:")
         bot.register_next_step_handler(message, handle_trade_amount)
     else:
@@ -185,7 +194,7 @@ def handle_ai_trade(message):
 def handle_trade_amount(message):
     user_id = message.from_user.id
     amount = message.text
-    c.execute("SELECT api_key, api_secret FROM user_data WHERE user_id = ?", (user_id,))
+    c.execute("SELECT api_key, api_secret FROM user_data WHERE user_id = %s", (user_id,))
     row = c.fetchone()
     if row:
         api_key, api_secret = row
@@ -212,7 +221,7 @@ def handle_strategy_selection(call):
     show_main_menu(call.message)
 
 def execute_trade(user_id, strategy, amount):
-    c.execute("SELECT api_key, api_secret FROM user_data WHERE user_id = ?", (user_id,))
+    c.execute("SELECT api_key, api_secret FROM user_data WHERE user_id = %s", (user_id,))
     row = c.fetchone()
     if row:
         api_key, api_secret = row
@@ -228,7 +237,7 @@ def execute_trade(user_id, strategy, amount):
                 trade_result = "Invalid strategy selected."
 
             # Update total traded amount
-            c.execute("UPDATE user_data SET total_traded = total_traded + ? WHERE user_id = ?", (float(amount), user_id))
+            c.execute("UPDATE user_data SET total_traded = total_traded + %s WHERE user_id = %s", (float(amount), user_id))
             conn.commit()
 
             # Send notification to the user
