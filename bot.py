@@ -2,12 +2,13 @@ import logging
 import telebot
 import requests
 import psycopg2
+from threading import Thread
+import os
+import time
+import json
 import hmac
 import hashlib
 import base64
-import json
-from threading import Thread
-import os
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -96,24 +97,6 @@ def show_trade_summary(message):
     total_traded = row[0] if row else 0
     bot.send_message(message.chat.id, f"Total USD traded: ${total_traded}")
 
-# Check user's balance
-def check_balance(api_key, api_secret, amount):
-    url = "https://api.coinbase.com/v2/accounts"
-    headers = {
-        "CB-ACCESS-KEY": api_key,
-        "CB-ACCESS-SIGN": api_secret,
-        "CB-ACCESS-TIMESTAMP": str(int(time.time())),
-        "Content-Type": "application/json"
-    }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        balance = sum([float(account['balance']['amount']) for account in data['data'] if account['currency'] == 'USD'])
-        return balance >= float(amount)
-    else:
-        print(f"Error fetching balance: {response.status_code}")
-        return False
-
 # Helper function to create Coinbase API signature
 def create_coinbase_signature(api_secret, timestamp, method, request_path, body=''):
     message = f'{timestamp}{method}{request_path}{body}'
@@ -164,7 +147,28 @@ def place_market_order(api_key, api_secret, amount, side='buy', product_id='BTC-
     else:
         raise Exception(f"Error placing market order: {response.status_code}")
 
-# Buy and Hold Strategy
+# Check user's balance
+def check_balance(api_key, api_secret, amount):
+    url = "https://api.coinbase.com/v2/accounts"
+    timestamp = str(int(time.time()))
+    request_path = '/v2/accounts'
+    method = 'GET'
+    headers = {
+        "CB-ACCESS-KEY": api_key,
+        "CB-ACCESS-SIGN": create_coinbase_signature(api_secret, timestamp, method, request_path),
+        "CB-ACCESS-TIMESTAMP": timestamp,
+        "Content-Type": "application/json"
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        balance = sum([float(account['balance']['amount']) for account in data['data'] if account['currency'] == 'USD'])
+        return balance >= float(amount)
+    else:
+        print(f"Error fetching balance: {response.status_code}")
+        return False
+
+# Trading strategy implementations
 def buy_and_hold(api_key, api_secret, amount):
     try:
         current_price = get_current_price(api_key, api_secret)
@@ -174,7 +178,6 @@ def buy_and_hold(api_key, api_secret, amount):
     except Exception as e:
         return f"Error executing Buy and Hold: {e}"
 
-# Moving Average Strategy
 def moving_average(api_key, api_secret, amount):
     try:
         # Placeholder logic for moving average strategy
@@ -185,7 +188,6 @@ def moving_average(api_key, api_secret, amount):
     except Exception as e:
         return f"Error executing Moving Average: {e}"
 
-# Mean Reversion Strategy
 def mean_reversion(api_key, api_secret, amount):
     try:
         # Placeholder logic for mean reversion strategy
@@ -194,7 +196,8 @@ def mean_reversion(api_key, api_secret, amount):
         order_response = place_market_order(api_key, api_secret, amount)
         return f"Executed Mean Reversion with ${amount}: {order_response}"
     except Exception as e:
-        return f"Error executing Mean Reversion: {e}
+        return f"Error executing Mean Reversion: {e}"
+
 # Telegram bot commands
 @bot.message_handler(commands=["start"])
 def start(message):
@@ -285,13 +288,17 @@ def handle_trade_amount(message):
     row = c.fetchone()
     if row:
         api_key, api_secret = row
-        # Ask the user to choose a trading strategy with buttons
-        keyboard = telebot.types.InlineKeyboardMarkup()
-        buy_and_hold_button = telebot.types.InlineKeyboardButton("Buy and Hold", callback_data=f"strategy:1:{amount}")
-        moving_average_button = telebot.types.InlineKeyboardButton("Moving Average", callback_data=f"strategy:2:{amount}")
-        mean_reversion_button = telebot.types.InlineKeyboardButton("Mean Reversion", callback_data=f"strategy:3:{amount}")
-        keyboard.add(buy_and_hold_button, moving_average_button, mean_reversion_button)
-        bot.send_message(message.chat.id, "Please choose a trading strategy:", reply_markup=keyboard)
+        # Check if user has sufficient balance
+        if check_balance(api_key, api_secret, amount):
+            # Ask the user to choose a trading strategy with buttons
+            keyboard = telebot.types.InlineKeyboardMarkup()
+            buy_and_hold_button = telebot.types.InlineKeyboardButton("Buy and Hold", callback_data=f"strategy:1:{amount}")
+            moving_average_button = telebot.types.InlineKeyboardButton("Moving Average", callback_data=f"strategy:2:{amount}")
+            mean_reversion_button = telebot.types.InlineKeyboardButton("Mean Reversion", callback_data=f"strategy:3:{amount}")
+            keyboard.add(buy_and_hold_button, moving_average_button, mean_reversion_button)
+            bot.send_message(message.chat.id, "Please choose a trading strategy:", reply_markup=keyboard)
+        else:
+            bot.send_message(message.chat.id, "Insufficient balance. Please check your balance and try again.")
     else:
         bot.send_message(message.chat.id, "API keys not found. Please set up your API keys first.")
 
