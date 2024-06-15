@@ -59,9 +59,9 @@ def show_main_menu(message):
         try:
             prices = get_coin_prices()
             if prices:
-                price_message = "**Current Coin Prices (USD):**\n"
+                price_message = "**Current Coin Prices (USD, EUR, GBP, BTC, USDT):**\n"
                 for coin, price in prices.items():
-                    price_message += f"- {coin}: ${price:.2f}\n"
+                    price_message += f"- {coin}: USD ${price['usd']:.2f}, EUR €{price['eur']:.2f}, GBP £{price['gbp']:.2f}, BTC {price['btc']:.6f}, USDT {price['usdt']:.2f}\n"
                 bot.send_message(message.chat.id, price_message, parse_mode="Markdown", reply_markup=keyboard)
             else:
                 bot.send_message(message.chat.id, "Unable to fetch coin prices. Please try again later.", reply_markup=keyboard)
@@ -74,17 +74,17 @@ def show_main_menu(message):
 def show_coin_list(message):
     prices = get_coin_prices()
     if prices:
-        coin_list_message = "Supported coins for trading:\n" + "\n".join([f"{coin}: ${price:.2f}" for coin, price in prices.items()])
+        coin_list_message = "Supported coins for trading:\n" + "\n".join([f"{coin}: USD ${price['usd']:.2f}, EUR €{price['eur']:.2f}, GBP £{price['gbp']:.2f}, BTC {price['btc']:.6f}, USDT {price['usdt']:.2f}" for coin, price in prices.items()])
         bot.send_message(message.chat.id, coin_list_message)
     else:
         bot.send_message(message.chat.id, "Unable to fetch coin prices.")
 
 def get_coin_prices():
-    url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,tether&vs_currencies=usd"
+    url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,tether&vs_currencies=usd,eur,gbp,btc,usdt"
     response = requests.get(url)
     if response.status_code == 200:
         data = response.json()
-        prices = {coin: data[coin]["usd"] for coin in data}
+        prices = {coin: data[coin] for coin in data}
         return prices
     else:
         print(f"Error fetching prices: {response.status_code}")
@@ -148,7 +148,7 @@ def place_market_order(api_key, api_secret, amount, side='buy', product_id='BTC-
         raise Exception(f"Error placing market order: {response.status_code}")
 
 # Check user's balance
-def check_balance(api_key, api_secret, amount):
+def check_balance(api_key, api_secret, amount, currency):
     url = "https://api.coinbase.com/v2/accounts"
     timestamp = str(int(time.time()))
     request_path = '/v2/accounts'
@@ -162,39 +162,33 @@ def check_balance(api_key, api_secret, amount):
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
         data = response.json()
-        balance = sum([float(account['balance']['amount']) for account in data['data'] if account['currency'] == 'USD'])
+        balance = sum([float(account['balance']['amount']) for account in data['data'] if account['currency'] == currency])
         return balance >= float(amount)
     else:
         print(f"Error fetching balance: {response.status_code}")
         return False
 
 # Trading strategy implementations
-def buy_and_hold(api_key, api_secret, amount):
+def buy_and_hold(api_key, api_secret, amount, currency='USD'):
     try:
-        current_price = get_current_price(api_key, api_secret)
+        current_price = get_current_price(api_key, api_secret, product_id=f'BTC-{currency}')
         amount_in_crypto = amount / current_price
-        order_response = place_market_order(api_key, api_secret, str(amount_in_crypto))
-        return f"Executed Buy and Hold with ${amount}: {order_response}"
+        order_response = place_market_order(api_key, api_secret, str(amount_in_crypto), product_id=f'BTC-{currency}')
+        return f"Executed Buy and Hold with {amount} {currency}: {order_response}"
     except Exception as e:
         return f"Error executing Buy and Hold: {e}"
 
-def moving_average(api_key, api_secret, amount):
+def moving_average(api_key, api_secret, amount, currency='USD'):
     try:
-        # Placeholder logic for moving average strategy
-        # In a real implementation, you would calculate the moving average
-        # and decide whether to buy or sell based on the average
-        order_response = place_market_order(api_key, api_secret, amount)
-        return f"Executed Moving Average with ${amount}: {order_response}"
+        order_response = place_market_order(api_key, api_secret, amount, product_id=f'BTC-{currency}')
+        return f"Executed Moving Average with {amount} {currency}: {order_response}"
     except Exception as e:
         return f"Error executing Moving Average: {e}"
 
-def mean_reversion(api_key, api_secret, amount):
+def mean_reversion(api_key, api_secret, amount, currency='USD'):
     try:
-        # Placeholder logic for mean reversion strategy
-        # In a real implementation, you would calculate the mean reversion
-        # and decide whether to buy or sell based on the reversion
-        order_response = place_market_order(api_key, api_secret, amount)
-        return f"Executed Mean Reversion with ${amount}: {order_response}"
+        order_response = place_market_order(api_key, api_secret, amount, product_id=f'BTC-{currency}')
+        return f"Executed Mean Reversion with {amount} {currency}: {order_response}"
     except Exception as e:
         return f"Error executing Mean Reversion: {e}"
 
@@ -288,33 +282,54 @@ def handle_trade_amount(message):
     row = c.fetchone()
     if row:
         api_key, api_secret = row
-        # Check if user has sufficient balance
-        if check_balance(api_key, api_secret, amount):
-            # Ask the user to choose a trading strategy with buttons
-            keyboard = telebot.types.InlineKeyboardMarkup()
-            buy_and_hold_button = telebot.types.InlineKeyboardButton("Buy and Hold", callback_data=f"strategy:1:{amount}")
-            moving_average_button = telebot.types.InlineKeyboardButton("Moving Average", callback_data=f"strategy:2:{amount}")
-            mean_reversion_button = telebot.types.InlineKeyboardButton("Mean Reversion", callback_data=f"strategy:3:{amount}")
-            keyboard.add(buy_and_hold_button, moving_average_button, mean_reversion_button)
-            bot.send_message(message.chat.id, "Please choose a trading strategy:", reply_markup=keyboard)
-        else:
-            bot.send_message(message.chat.id, "Insufficient balance. Please check your balance and try again.")
+        # Ask the user to choose a currency with buttons
+        keyboard = telebot.types.InlineKeyboardMarkup()
+        usd_button = telebot.types.InlineKeyboardButton("USD", callback_data=f"currency:USD:{amount}")
+        eur_button = telebot.types.InlineKeyboardButton("EUR", callback_data=f"currency:EUR:{amount}")
+        gbp_button = telebot.types.InlineKeyboardButton("GBP", callback_data=f"currency:GBP:{amount}")
+        btc_button = telebot.types.InlineKeyboardButton("BTC", callback_data=f"currency:BTC:{amount}")
+        usdt_button = telebot.types.InlineKeyboardButton("USDT", callback_data=f"currency:USDT:{amount}")
+        keyboard.add(usd_button, eur_button, gbp_button, btc_button, usdt_button)
+        bot.send_message(message.chat.id, "Please choose a currency:", reply_markup=keyboard)
     else:
         bot.send_message(message.chat.id, "API keys not found. Please set up your API keys first.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("currency:"))
+def handle_currency_selection(call):
+    user_id = call.from_user.id
+    _, currency, amount = call.data.split(":")
+    
+    # Check if user has sufficient balance
+    c.execute("SELECT api_key, api_secret FROM user_data WHERE user_id = %s", (user_id,))
+    row = c.fetchone()
+    if row:
+        api_key, api_secret = row
+        if check_balance(api_key, api_secret, amount, currency):
+            # Ask the user to choose a trading strategy with buttons
+            keyboard = telebot.types.InlineKeyboardMarkup()
+            buy_and_hold_button = telebot.types.InlineKeyboardButton("Buy and Hold", callback_data=f"strategy:1:{amount}:{currency}")
+            moving_average_button = telebot.types.InlineKeyboardButton("Moving Average", callback_data=f"strategy:2:{amount}:{currency}")
+            mean_reversion_button = telebot.types.InlineKeyboardButton("Mean Reversion", callback_data=f"strategy:3:{amount}:{currency}")
+            keyboard.add(buy_and_hold_button, moving_average_button, mean_reversion_button)
+            bot.send_message(call.message.chat.id, "Please choose a trading strategy:", reply_markup=keyboard)
+        else:
+            bot.send_message(call.message.chat.id, "Insufficient balance. Please check your balance and try again.")
+    else:
+        bot.send_message(call.message.chat.id, "API keys not found. Please set up your API keys first.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("strategy:"))
 def handle_strategy_selection(call):
     user_id = call.from_user.id
-    _, strategy, amount = call.data.split(":")
+    _, strategy, amount, currency = call.data.split(":")
     
     # Start the selected trading strategy in a separate thread to avoid blocking the bot
-    trade_thread = Thread(target=execute_trade, args=(user_id, strategy, amount))
+    trade_thread = Thread(target=execute_trade, args=(user_id, strategy, amount, currency))
     trade_thread.start()
 
-    bot.send_message(call.message.chat.id, f"Trading started with ${amount} using strategy {strategy}.")
+    bot.send_message(call.message.chat.id, f"Trading started with {amount} {currency} using strategy {strategy}.")
     show_main_menu(call.message)
 
-def execute_trade(user_id, strategy, amount):
+def execute_trade(user_id, strategy, amount, currency):
     c.execute("SELECT api_key, api_secret FROM user_data WHERE user_id = %s", (user_id,))
     row = c.fetchone()
     if row:
@@ -322,11 +337,11 @@ def execute_trade(user_id, strategy, amount):
 
         try:
             if strategy == "1":
-                trade_result = buy_and_hold(api_key, api_secret, amount)
+                trade_result = buy_and_hold(api_key, api_secret, amount, currency)
             elif strategy == "2":
-                trade_result = moving_average(api_key, api_secret, amount)
+                trade_result = moving_average(api_key, api_secret, amount, currency)
             elif strategy == "3":
-                trade_result = mean_reversion(api_key, api_secret, amount)
+                trade_result = mean_reversion(api_key, api_secret, amount, currency)
             else:
                 trade_result = "Invalid strategy selected."
 
