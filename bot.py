@@ -168,6 +168,27 @@ def check_balance(api_key, api_secret, amount, currency):
         print(f"Error fetching balance: {response.status_code}")
         return False
 
+# Get user's balance for all relevant currencies
+def get_all_balances(api_key, api_secret):
+    url = "https://api.coinbase.com/v2/accounts"
+    timestamp = str(int(time.time()))
+    request_path = '/v2/accounts'
+    method = 'GET'
+    headers = {
+        "CB-ACCESS-KEY": api_key,
+        "CB-ACCESS-SIGN": create_coinbase_signature(api_secret, timestamp, method, request_path),
+        "CB-ACCESS-TIMESTAMP": timestamp,
+        "Content-Type": "application/json"
+    }
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        balances = {account['currency']: account['balance']['amount'] for account in data['data']}
+        return balances
+    else:
+        print(f"Error fetching balances: {response.status_code}")
+        return {}
+
 # Trading strategy implementations
 def buy_and_hold(api_key, api_secret, amount, currency='USD'):
     try:
@@ -261,8 +282,18 @@ def handle_api_secret(message):
     api_secret = message.text
     c.execute("UPDATE user_data SET api_secret = %s WHERE user_id = %s", (api_secret, user_id))
     conn.commit()
-    bot.send_message(message.chat.id, "API keys have been saved and validated.")
-    show_main_menu(message)
+    try:
+        # Validate API keys by making a simple request and show the user's balance
+        c.execute("SELECT api_key, api_secret FROM user_data WHERE user_id = %s", (user_id,))
+        row = c.fetchone()
+        if row:
+            api_key, api_secret = row
+            balances = get_all_balances(api_key, api_secret)
+            balance_message = "Your balances:\n" + "\n".join([f"{currency}: {amount}" for currency, amount in balances.items()])
+            bot.send_message(message.chat.id, f"API keys have been saved and validated.\n{balance_message}")
+            show_main_menu(message)
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Invalid API keys: {e}")
 
 @bot.message_handler(func=lambda message: message.text == "AI Trade")
 def handle_ai_trade(message):
@@ -270,36 +301,28 @@ def handle_ai_trade(message):
     c.execute("SELECT subscribed FROM user_data WHERE user_id = %s", (user_id,))
     row = c.fetchone()
     if row and row[0]:
-        bot.send_message(message.chat.id, "Please enter the amount in dollars to trade:")
-        bot.register_next_step_handler(message, handle_trade_amount)
-    else:
-        bot.send_message(message.chat.id, "Please subscribe first.")
-
-def handle_trade_amount(message):
-    user_id = message.from_user.id
-    amount = message.text
-    c.execute("SELECT api_key, api_secret FROM user_data WHERE user_id = %s", (user_id,))
-    row = c.fetchone()
-    if row:
-        api_key, api_secret = row
         # Ask the user to choose a currency with buttons
         keyboard = telebot.types.InlineKeyboardMarkup()
-        usd_button = telebot.types.InlineKeyboardButton("USD", callback_data=f"currency:USD:{amount}")
-        eur_button = telebot.types.InlineKeyboardButton("EUR", callback_data=f"currency:EUR:{amount}")
-        gbp_button = telebot.types.InlineKeyboardButton("GBP", callback_data=f"currency:GBP:{amount}")
-        btc_button = telebot.types.InlineKeyboardButton("BTC", callback_data=f"currency:BTC:{amount}")
-        usdt_button = telebot.types.InlineKeyboardButton("USDT", callback_data=f"currency:USDT:{amount}")
+        usd_button = telebot.types.InlineKeyboardButton("USD", callback_data=f"currency:USD")
+        eur_button = telebot.types.InlineKeyboardButton("EUR", callback_data=f"currency:EUR")
+        gbp_button = telebot.types.InlineKeyboardButton("GBP", callback_data=f"currency:GBP")
+        btc_button = telebot.types.InlineKeyboardButton("BTC", callback_data=f"currency:BTC")
+        usdt_button = telebot.types.InlineKeyboardButton("USDT", callback_data=f"currency:USDT")
         keyboard.add(usd_button, eur_button, gbp_button, btc_button, usdt_button)
         bot.send_message(message.chat.id, "Please choose a currency:", reply_markup=keyboard)
     else:
-        bot.send_message(message.chat.id, "API keys not found. Please set up your API keys first.")
+        bot.send_message(message.chat.id, "Please subscribe first.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("currency:"))
 def handle_currency_selection(call):
     user_id = call.from_user.id
-    _, currency, amount = call.data.split(":")
-    
-    # Check if user has sufficient balance
+    _, currency = call.data.split(":")
+    bot.send_message(call.message.chat.id, f"Please enter the amount in {currency} to trade:")
+    bot.register_next_step_handler(call.message, handle_trade_amount, currency)
+
+def handle_trade_amount(message, currency):
+    user_id = message.from_user.id
+    amount = message.text
     c.execute("SELECT api_key, api_secret FROM user_data WHERE user_id = %s", (user_id,))
     row = c.fetchone()
     if row:
@@ -311,11 +334,11 @@ def handle_currency_selection(call):
             moving_average_button = telebot.types.InlineKeyboardButton("Moving Average", callback_data=f"strategy:2:{amount}:{currency}")
             mean_reversion_button = telebot.types.InlineKeyboardButton("Mean Reversion", callback_data=f"strategy:3:{amount}:{currency}")
             keyboard.add(buy_and_hold_button, moving_average_button, mean_reversion_button)
-            bot.send_message(call.message.chat.id, "Please choose a trading strategy:", reply_markup=keyboard)
+            bot.send_message(message.chat.id, "Please choose a trading strategy:", reply_markup=keyboard)
         else:
-            bot.send_message(call.message.chat.id, "Insufficient balance. Please check your balance and try again.")
+            bot.send_message(message.chat.id, "Insufficient balance. Please check your balance and try again.")
     else:
-        bot.send_message(call.message.chat.id, "API keys not found. Please set up your API keys first.")
+        bot.send_message(message.chat.id, "API keys not found. Please set up your API keys first.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("strategy:"))
 def handle_strategy_selection(call):
